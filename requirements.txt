@@ -1,0 +1,10 @@
+opencv-python
+numpy
+PyQt6
+PyOpenGL
+fastapi
+uvicorn
+pillow
+requests
+onnxruntime
+tomli; python_version < "3.11"

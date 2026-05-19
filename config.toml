@@ -1,0 +1,10 @@
+# Pixel-Level Annotator — Runtime Configuration
+
+[viewer]
+# Rendering backend for the annotation canvas.
+# Available options:
+#   "gl"  — OpenGL 3.3 Core Profile (QOpenGLWidget). Recommended for large
+#            images: GPU-accelerated textures and shader-based compositing.
+#   "qt"  — Pure Qt (QGraphicsView/QPixmap). No GPU requirements; suitable
+#            for environments without OpenGL 3.3 support.
+backend = "gl"
