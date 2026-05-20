@@ -741,6 +741,18 @@ class MainWindow(QMainWindow):
     def _refresh_stats(self, _progress: int = 0) -> None:
         if self._stats_panel.isVisible() and self._controller:
             self._stats_panel.update_stats(self._controller.get_display_stats())
+            ai_metrics = self._controller.autolabel_service.last_ai_metrics
+            doc = self._controller.document
+            hcr = None
+            if doc is not None:
+                hcr = self._controller.autolabel_service.get_hcr(doc.annotations)
+            if ai_metrics is not None or hcr is not None:
+                combined = dict(ai_metrics) if ai_metrics is not None else {}
+                if hcr is not None:
+                    combined["Correction Rate (HCR)"] = f"{hcr:.2f} %"
+                self._stats_panel.update_ai_metrics(combined)
+            else:
+                self._stats_panel.clear_ai_metrics()
 
     def _populate_gallery(self) -> None:
         filenames = self._image_repo.list_images()
@@ -756,6 +768,8 @@ class MainWindow(QMainWindow):
 
     def _on_gallery_image_selected(self, filename: str) -> None:
         self._stats_panel.reset()
+        self._controller.autolabel_service.last_ai_metrics = None
+        self._controller.autolabel_service.last_confidence_map = None
         self._controller.load_image(filename)
         self._gallery.set_current_filename(filename)
         self._update_status()

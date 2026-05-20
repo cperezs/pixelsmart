@@ -160,8 +160,8 @@ class PluginManager:
 
         Returns
         -------
-        (label_map, None) on success — *label_map* uses **app** layer indices.
-        (None, error_message) on failure.
+        (label_map, confidence_map, None) on success — *label_map* uses **app** layer indices.
+        (None, None, error_message) on failure.
         """
         h, w = image_array.shape[:2]
 
@@ -170,12 +170,12 @@ class PluginManager:
             if plugin_config is not None and hasattr(plugin, 'run_with_config'):
                 strategy = getattr(plugin_config, 'conflict_strategy', 'argmax')
                 priorities = getattr(plugin_config, 'layer_priorities', {})
-                result = plugin.run_with_config(image_array, strategy, priorities)
+                result, confidence_map = plugin.run_with_config(image_array, strategy, priorities)
             else:
-                result = plugin.run(image_array)
+                result, confidence_map = plugin.run(image_array)
         except Exception as e:
             self._logger.error("Plugin '%s' execution failed: %s", plugin.id, e)
-            return None, f"Plugin execution failed: {e}"
+            return None, None, f"Plugin execution failed: {e}"
 
         # --- validate -----------------------------------------------------
         error = self._validate_output(result, h, w, plugin)
@@ -183,7 +183,7 @@ class PluginManager:
             self._logger.error(
                 "Plugin '%s' output invalid: %s", plugin.id, error
             )
-            return None, error
+            return None, None, error
 
         # --- map plugin indices → app indices -----------------------------
         user_mapping = getattr(plugin_config, 'layer_mapping', None) if plugin_config else None
@@ -191,9 +191,9 @@ class PluginManager:
         if mapped is None:
             msg = "Failed to map plugin layers to application layers."
             self._logger.error(msg)
-            return None, msg
+            return None, None, msg
 
-        return mapped, None
+        return mapped, confidence_map, None
 
     # ------------------------------------------------------------------
     # Internal helpers

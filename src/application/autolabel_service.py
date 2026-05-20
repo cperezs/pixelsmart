@@ -9,6 +9,8 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
+import numpy as np
+
 from domain.image_document import ImageDocument
 from infrastructure.metadata import ImageMetadata
 from application.autolabel_metrics import AutolabelMetrics
@@ -31,6 +33,8 @@ class AutolabelService:
         self._plugin_manager = PluginManager()
         self._plugin_manager.update_layers(layer_names)
         self._active_metrics: Optional[AutolabelMetrics] = None
+        self.last_confidence_map: Optional[np.ndarray] = None
+        self.last_ai_metrics: Optional[dict] = None
 
     # ------------------------------------------------------------------
     # Plugin discovery
@@ -77,7 +81,7 @@ class AutolabelService:
         if plugin is None:
             return False, f"Unknown or incompatible plugin: {plugin_id}"
 
-        label_map, error = self._plugin_manager.run_plugin(plugin, document.image, plugin_config)
+        label_map, confidence_map, error = self._plugin_manager.run_plugin(plugin, document.image, plugin_config)
         if error:
             return False, error
 
@@ -88,13 +92,39 @@ class AutolabelService:
         )
         metadata.set_autolabel_plugin(plugin.id)
 
+        n_pixels = document.height * document.width
         self._active_metrics = AutolabelMetrics(
             plugin_id=plugin.id,
             layer_names=self._layer_names,
             metadata=metadata,
+            plugin_snapshot=document.annotations,
+            n_pixels=n_pixels,
         )
+        self.last_confidence_map = confidence_map
+        if confidence_map is not None:
+            pcr = self.compute_pcr(confidence_map)
+            self.last_ai_metrics = {"Prediction Confidence Ratio (PCR)": round(pcr, 2)}
+        else:
+            self.last_ai_metrics = None
         logger.info("Autolabel run: plugin=%s", plugin.id)
         return True, None
+
+    # ------------------------------------------------------------------
+    # Confidence / PCR
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def compute_pcr(confidence_map: np.ndarray) -> float:
+        """Compute Prediction Confidence Ratio from a per-pixel confidence map.
+
+        Divides [0, 1] into four equal-width bins and returns
+        PCR = (H1 + H4) / (H2 + H3 + ε).
+        """
+        flat = confidence_map.ravel()
+        counts, _ = np.histogram(flat, bins=4, range=(0.0, 1.0))
+        total = flat.size if flat.size > 0 else 1
+        h1, h2, h3, h4 = counts / total
+        return float((h1 + h4) / (h2 + h3 + 1e-6))
 
     # ------------------------------------------------------------------
     # Correction metrics
@@ -113,6 +143,12 @@ class AutolabelService:
     def finalize_session(self) -> None:
         """End the current correction session (no-op if none is active)."""
         self._active_metrics = None
+
+    def get_hcr(self, current_annotations) -> Optional[float]:
+        """Return HCR percentage, or None if no active metrics session."""
+        if self._active_metrics is None:
+            return None
+        return self._active_metrics.compute_hcr(current_annotations)
 
     # ------------------------------------------------------------------
     # Fine-tuning

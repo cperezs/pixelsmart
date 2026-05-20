@@ -2,9 +2,12 @@
 
 Each plugin must subclass AutolabelPlugin and implement all abstract
 properties and methods.  The plugin's ``run`` method receives the raw
-BGR image (as loaded by OpenCV) and must return a 2-D NumPy label map
-whose pixel values are indices into the plugin's ``supported_layers``
-list.
+BGR image (as loaded by OpenCV) and must return a tuple
+``(label_map, confidence_map)`` where *label_map* is a 2-D NumPy array
+whose pixel values are indices into ``supported_layers`` and
+*confidence_map* is an optional 2-D ``np.ndarray`` of float32 values
+in ``[0, 1]`` representing the per-pixel prediction confidence, or
+``None`` if the plugin cannot produce one.
 """
 
 from abc import ABC, abstractmethod
@@ -37,7 +40,7 @@ class AutolabelPlugin(ABC):
         ...
 
     @abstractmethod
-    def run(self, image: np.ndarray) -> np.ndarray:
+    def run(self, image: np.ndarray) -> tuple[np.ndarray, "np.ndarray | None"]:
         """Run the plugin on the given image.
 
         Parameters
@@ -47,10 +50,12 @@ class AutolabelPlugin(ABC):
 
         Returns
         -------
-        np.ndarray
-            Label map of shape ``(H, W)`` with dtype compatible with
-            integer comparison.  Each pixel value must be a valid index
-            into ``supported_layers``.
+        (label_map, confidence_map)
+            *label_map* — 2-D ``np.ndarray`` of shape ``(H, W)`` whose pixel
+            values are valid indices into ``supported_layers``.
+            *confidence_map* — optional 2-D ``np.ndarray`` of float32 values
+            in ``[0, 1]`` representing per-pixel prediction confidence,
+            or ``None`` if the plugin cannot provide one.
         """
         ...
 

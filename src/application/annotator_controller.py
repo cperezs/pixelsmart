@@ -530,6 +530,8 @@ class AnnotatorController:
         if self._action_logger:
             self._action_logger.clear_log()
         self._image_repo.save_annotations(self._document, self._current_filename, [lc.name for lc in self._layer_configs])
+        self._autolabel.finalize_session()
+        self._autolabel.last_ai_metrics = None
         self._sync_annotation_overlay()
         self._notify_progress()
 

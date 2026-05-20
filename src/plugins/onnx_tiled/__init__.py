@@ -341,7 +341,7 @@ class OnnxTiledPlugin(AutolabelPlugin):
         self._sessions = new_sessions
         self._logger.info("set_active_version: activa versión '%s'", version)
 
-    def run(self, image: np.ndarray) -> np.ndarray:
+    def run(self, image: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         prob_maps = []
         for session, layer_name in zip(self._sessions, self._layer_names):
             prob = self._run_model(session, image, layer_name)
@@ -349,38 +349,43 @@ class OnnxTiledPlugin(AutolabelPlugin):
 
         prob_stack = np.stack(prob_maps, axis=-1)
         label_map = np.argmax(prob_stack, axis=-1).astype(np.uint8)
-        return label_map
+        H, W = prob_stack.shape[:2]
+        winner_prob = prob_stack[np.arange(H)[:, None], np.arange(W)[None, :], label_map]
+        return label_map, winner_prob
+
 
     def run_with_config(
         self,
         image: np.ndarray,
         strategy: str,
         layer_priorities: dict,
-    ) -> np.ndarray:
-        """Run inference and apply the requested conflict resolution strategy.
+    ) -> tuple[np.ndarray, dict]:
+        """Run inference with a specific conflict resolution strategy.
 
         Parameters
         ----------
         strategy:
-            ``"argmax"`` \u2014 standard argmax over per-layer probabilities (same
-            as ``run()``).
-            ``"layer_priority"`` \u2014 for each pixel assign the highest-priority
-            layer (lowest priority number) whose probability \u2265 0.5.  Pixels
-            where no layer reaches the threshold fall back to argmax.
+            ``"argmax"`` — standard argmax (same as ``run()``).
+            ``"layer_priority"`` — assign each pixel to the highest-priority
+            layer whose probability ≥ 0.5; falls back to argmax.
         layer_priorities:
-            ``{layer_name: priority_int}`` dict where 1 is the highest
-            priority.  Used only when *strategy* is ``"layer_priority"``.
+            ``{layer_name: priority_int}`` dict (1 = highest priority).
+            Used only when *strategy* is ``"layer_priority"``.
         """
         prob_maps = []
         for session, layer_name in zip(self._sessions, self._layer_names):
             prob = self._run_model(session, image, layer_name)
             prob_maps.append(prob)
 
-        prob_stack = np.stack(prob_maps, axis=-1)  # H \u00d7 W \u00d7 N_layers
+        prob_stack = np.stack(prob_maps, axis=-1)  # H × W × N_layers
 
         if strategy == "layer_priority" and layer_priorities:
-            return self._apply_layer_priority(prob_stack, layer_priorities)
-        return np.argmax(prob_stack, axis=-1).astype(np.uint8)
+            label_map = self._apply_layer_priority(prob_stack, layer_priorities)
+        else:
+            label_map = np.argmax(prob_stack, axis=-1).astype(np.uint8)
+        H, W = prob_stack.shape[:2]
+        winner_prob = prob_stack[np.arange(H)[:, None], np.arange(W)[None, :], label_map]
+        return label_map, winner_prob
 
     # Conflict resolution ----------------------------------------------
 

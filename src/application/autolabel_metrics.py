@@ -18,7 +18,7 @@ class AutolabelMetrics:
     user switches images or runs another plugin.
     """
 
-    def __init__(self, plugin_id: str, layer_names: list, metadata):
+    def __init__(self, plugin_id: str, layer_names: list, metadata, plugin_snapshot, n_pixels: int):
         self._logger = logging.getLogger("AutolabelMetrics")
         self.plugin_id = plugin_id
         self.layer_names = list(layer_names)
@@ -41,6 +41,10 @@ class AutolabelMetrics:
         }
 
         self._pre_edit_snapshot = None
+
+        # HCR snapshot: plugin output captured immediately after set_from_labelmap.
+        self._plugin_snapshot = [a.copy() for a in plugin_snapshot]
+        self._n_pixels = n_pixels
 
     # ------------------------------------------------------------------
     # Edit tracking
@@ -88,6 +92,23 @@ class AutolabelMetrics:
             total_modified_pixels=self.total_modified_pixels,
             per_layer=self.per_layer,
         )
+
+    # ------------------------------------------------------------------
+    # HCR
+    # ------------------------------------------------------------------
+
+    def compute_hcr(self, current_annotations) -> float:
+        """Return HCR = |snapshot ⊕ current| / N × 100.
+
+        Returns 0.0 when there is no difference with the plugin snapshot
+        (no corrections yet) and 100.0 when all pixels have been changed.
+        """
+        if self._n_pixels == 0:
+            return 0.0
+        diff = 0
+        for snap, cur in zip(self._plugin_snapshot, current_annotations):
+            diff += int(np.count_nonzero((snap > 0) != (cur > 0)))
+        return (diff / self._n_pixels) * 100.0
 
     # ------------------------------------------------------------------
     # Reporting

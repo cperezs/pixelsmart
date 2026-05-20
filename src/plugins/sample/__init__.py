@@ -38,4 +38,4 @@ class SamplePlugin(AutolabelPlugin):
         label_map[2 * stripe_h : 3 * stripe_h, :] = 2
         label_map[3 * stripe_h :, :] = 3
 
-        return label_map
+        return label_map, None

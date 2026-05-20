@@ -113,6 +113,8 @@ class StatsPanel(QWidget):
         self._build_pixels_section()
         self._cl.addSpacing(14)
         self._build_time_section()
+        self._cl.addSpacing(14)
+        self._build_ai_metrics_section()
         self._cl.addStretch()
 
         scroll.setWidget(content)
@@ -173,6 +175,36 @@ class StatsPanel(QWidget):
         for lbl in self._layer_time_labels.values():
             lbl.setText("0:00")
         self._time_total_lbl.setText("0:00")
+        self.clear_ai_metrics()
+
+    def update_ai_metrics(self, metrics: dict) -> None:
+        """Show the AI METRICS section populated with *metrics* key-value pairs."""
+        self._clear_layout(self._ai_metrics_rows_layout)
+        for key, value in metrics.items():
+            row = QHBoxLayout()
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(6)
+            key_lbl = QLabel(str(key))
+            key_lbl.setStyleSheet(
+                f"color: {ON_SURFACE_VARIANT}; font-size: {FONT_SIZE_SM}px;"
+            )
+            val_lbl = QLabel(str(value))
+            val_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            val_lbl.setStyleSheet(
+                f"color: {ON_SURFACE}; font-size: {FONT_SIZE_SM}px; font-weight: 700;"
+            )
+            row.addWidget(key_lbl, 1)
+            row.addWidget(val_lbl)
+            row_w = QWidget()
+            row_w.setStyleSheet("background: transparent;")
+            row_w.setLayout(row)
+            self._ai_metrics_rows_layout.addWidget(row_w)
+        self._ai_metrics_widget.setVisible(True)
+
+    def clear_ai_metrics(self) -> None:
+        """Hide and empty the AI METRICS section."""
+        self._clear_layout(self._ai_metrics_rows_layout)
+        self._ai_metrics_widget.setVisible(False)
 
     # ------------------------------------------------------------------
     # Construction helpers
@@ -320,6 +352,28 @@ class StatsPanel(QWidget):
         total_row.addWidget(total_lbl, 1)
         total_row.addWidget(self._time_total_lbl)
         self._cl.addLayout(total_row)
+
+    # --- AI Metrics section ---
+
+    def _build_ai_metrics_section(self) -> None:
+        self._ai_metrics_widget = QWidget()
+        self._ai_metrics_widget.setStyleSheet("background: transparent;")
+        self._ai_metrics_widget.setVisible(False)
+        inner = QVBoxLayout(self._ai_metrics_widget)
+        inner.setContentsMargins(0, 0, 0, 0)
+        inner.setSpacing(0)
+
+        inner.addWidget(self._section_header_lbl("AI METRICS"))
+        inner.addSpacing(8)
+
+        self._ai_metrics_rows_widget = QWidget()
+        self._ai_metrics_rows_widget.setStyleSheet("background: transparent;")
+        self._ai_metrics_rows_layout = QVBoxLayout(self._ai_metrics_rows_widget)
+        self._ai_metrics_rows_layout.setContentsMargins(0, 0, 0, 0)
+        self._ai_metrics_rows_layout.setSpacing(6)
+        inner.addWidget(self._ai_metrics_rows_widget)
+
+        self._cl.addWidget(self._ai_metrics_widget)
 
     # --- Dynamic layer rows ---
 
