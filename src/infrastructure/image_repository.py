@@ -11,6 +11,7 @@ from typing import Optional
 
 import cv2
 import numpy as np
+from PIL import Image
 
 from domain.image_document import ImageDocument
 
@@ -147,7 +148,7 @@ class ImageRepository:
                 path = os.path.join(self._annotations_dir, f"{stem}_{safe}.png")
             else:
                 path = os.path.join(self._annotations_dir, f"{stem}_{i}.png")
-            cv2.imwrite(path, mask)
+            Image.fromarray(mask).convert("1").save(path)
         logger.debug("Saved annotations for: %s", filename)
 
     def rename_annotation_files(
