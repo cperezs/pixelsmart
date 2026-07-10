@@ -50,7 +50,7 @@ The application remembers the last opened project in `~/.pixelsmart/app.json`. W
 - Last opened image
 - Active annotation tool and brush/eraser sizes
 - Selector threshold
-- AI plugin selection and configuration
+- ML plugin selection and configuration
 - Global layer opacity
 - Rendering backend
 
@@ -69,7 +69,7 @@ lyrics      #49be25
 
 - Layers can be **locked** (protected from modification) or **hidden** individually.
 - Layer overlays are composited over the source image with configurable global opacity.
-- Annotations for each layer are stored as independent 8-bit grayscale PNG masks:
+- Annotations for each layer are stored as independent 1-bit binary PNG masks:
   `annotations/<image_stem>_<layer_name>.png` — pixel `0` = unlabeled, `> 0` = annotated.
 - Per-image metadata (time, pixel counts, correction metrics) is stored as JSON in `annotations/<image_stem>.metadata`.
 
@@ -164,11 +164,18 @@ Every image has an append-only JSON log at `annotations/logs/<image_stem>.json`.
 
 Metadata files additionally store cumulative **time per layer**, **pixel addition/deletion counts per layer**, and **post-autolabel correction metrics** (operations, pixels changed, per-layer breakdown).
 
+### AI statistics
+
+When a plugin runs, two metrics quantify prediction quality and the human effort spent correcting it ([src/application/autolabel_service.py](src/application/autolabel_service.py), [src/application/autolabel_metrics.py](src/application/autolabel_metrics.py)):
+
+- **Prediction Confidence Ratio (PCR)** — derived from the plugin's confidence map. The per-pixel confidences in `[0, 1]` are split into four equal bins; `PCR = (H1 + H4) / (H2 + H3 + ε)`, so a higher value means predictions are more decisive (concentrated near 0 or 1) rather than uncertain. Only produced when the plugin returns a confidence map.
+- **Correction Rate (HCR)** — the fraction of pixels changed relative to the plugin's post-autolabel snapshot: `HCR = |snapshot ⊕ current| / N × 100`. `0%` means the prediction was accepted unchanged; `100%` means every pixel was corrected.
+
 ---
 
-## AI Plugin System
+## ML Plugin System
 
-PixelSmart integrates AI-based pre-annotation through an extensible plugin architecture. All plugins subclass the `AutolabelPlugin` abstract base class:
+PixelSmart integrates ML-based pre-annotation through an extensible plugin architecture. All plugins subclass the `AutolabelPlugin` abstract base class ([src/application/plugin_base.py](src/application/plugin_base.py)):
 
 ```python
 class AutolabelPlugin(ABC):
@@ -179,41 +186,55 @@ class AutolabelPlugin(ABC):
     def display_name(self) -> str: ...
 
     @property @abstractmethod
-    def supported_layers(self) -> list[str]: ...
+    def supported_layers(self) -> list:
+        """Ordered layer names; each name's index is its value in the label map."""
 
     @abstractmethod
-    def run(self, image: np.ndarray) -> np.ndarray:
-        """Return an (H, W) label map with integer layer indices."""
+    def run(self, image: np.ndarray) -> tuple[np.ndarray, "np.ndarray | None"]:
+        """Given a BGR image (H, W, C), return (label_map, confidence_map).
 
-    # Optional fine-tuning interface
+        label_map      — (H, W) array of indices into supported_layers.
+        confidence_map — optional (H, W) float32 array in [0, 1], or None.
+        """
+
+    # Optional fine-tuning interface (default: not supported)
     @property
     def can_fine_tune(self) -> bool: return False
-    def list_versions(self) -> list[dict]: return []
-    def fine_tune(self, data: list[dict]) -> None: ...
+
+    def list_versions(self) -> list[dict]: return []  # {"label", "date", "is_original"}
+
+    def fine_tune(self, images_and_annotations: list[dict]) -> None:
+        """Each item: {"image": BGR ndarray, "annotations": list[ndarray] masks}.
+
+        Default raises NotImplementedError. Called synchronously from a background thread.
+        """
 ```
 
-Plugins are **auto-discovered** at startup by scanning `src/plugins/`. A plugin directory needs only an `__init__.py` exporting a concrete subclass (or a `get_plugins()` factory for multiple instances).
+The input `image` is in **BGR** order (OpenCV convention). `run()` returns a **tuple**: an `(H, W)` label map plus an optional per-pixel confidence map (used for the AI statistics below).
+
+Plugins are **auto-discovered** at startup by scanning `src/plugins/` ([src/application/plugin_manager.py](src/application/plugin_manager.py)). A plugin directory needs only an `__init__.py`. Discovery checks for a module-level `get_plugins()` factory first (for registering multiple instances); if absent, it falls back to the first concrete `AutolabelPlugin` subclass it finds. All discovered plugins are offered regardless of their layer names — compatibility is determined by the user-configured layer mapping, not by name matching.
 
 ### Included plugin: `onnx_tiled`
 
-Loads one binary ONNX segmentation model per layer from a subfolder under `src/plugins/onnx_tiled/onnx/<model_name>/`. Inference is performed on 256×256 patches with a 5-pixel overlap margin. The final label for each pixel is determined by argmax across all per-layer probability maps.
+Loads one binary ONNX segmentation model per layer (`<layer>.onnx`) from a subfolder under `src/plugins/onnx_tiled/onnx/<model_name>/`. Each model subfolder yields a separate plugin instance via `get_plugins()`. Inference runs on 256×256 patches with a `_MARGIN = 5` px border discarded from each interior patch edge, giving a stride of `256 − 2·5 = 246` (10 px overlap between adjacent patches) before the per-patch probabilities are averaged. The final label for each pixel is the argmax across all per-layer probability maps; the winning probability is returned as the confidence map.
 
 ### Layer mapping and conflict resolution
 
-The plugin configuration dialog allows mapping model output layers to application layers. Two conflict resolution strategies are available:
+The plugin configuration dialog ([src/presentation/model_config_dialog.py](src/presentation/model_config_dialog.py)) maps model output layers to application layers. Two conflict resolution strategies are available:
 
-- **Argmax**: the layer with maximum model confidence wins.
-- **Layer priority**: the highest-priority layer exceeding a 0.5 probability threshold is selected; pixels below threshold fall back to argmax.
+- **Argmax** ("Highest model confidence"): the layer with maximum model confidence wins.
+- **Layer priority**: the highest-priority layer exceeding a 0.5 probability threshold is selected; pixels below threshold fall back to argmax. Priorities are assigned uniquely per layer.
 
 ---
 
 ## Fine-Tuning in the Active Learning Loop
 
-1. Open the fine-tuning dialog and select **fully annotated images** (100% coverage) from the project gallery.
-2. The selected images and masks are passed to the active plugin's `fine_tune()` method in a **background thread**, keeping the UI responsive.
-3. The plugin saves training data and notifies the application on completion.
-4. Each run creates a new versioned model directory (`fine_tuned/v2/`, `fine_tuned/v3/`, …). The original model is always preserved as `v1`.
-5. All versions are selectable from the plugin configuration dialog, showing version label and creation timestamp.
+The `fine_tune()` / versioning interface lets a plugin participate in an active-learning loop where newly corrected annotations feed back into the model. The application provides the workflow and threading; a plugin that sets `can_fine_tune = True` implements the training itself.
+
+1. A dedicated modal dialog ([src/presentation/fine_tune_selection_dialog.py](src/presentation/fine_tune_selection_dialog.py)) shows a thumbnail grid of the project's **fully annotated images** (100% coverage — every pixel labeled in at least one layer). Only these are selectable, and the *Fine-tune* button stays disabled until at least one image is chosen.
+2. The selected images and their per-layer masks are remapped into the plugin's `supported_layers` order and passed as a `list[dict]` to the plugin's `fine_tune()` method on a **background `QThread`** (`_FineTuneWorker`, [src/presentation/main_window.py](src/presentation/main_window.py)), keeping the UI responsive. Completion (or failure) is reported back via a signal.
+3. **Versioning contract**: a plugin may create new versioned model directories (`fine_tuned/v2/`, `fine_tuned/v3/`, …). `v1` refers to the original model files in the model root and is always preserved.
+4. `list_versions()` reports each version's label and timestamp; all versions are selectable from the plugin configuration dialog and applied via `set_active_version()` for subsequent inference.
 
 ---
 
@@ -234,17 +255,11 @@ The backend is also configurable per project and persisted in the project config
 
 ---
 
-## Web Service Mode
-
-An optional FastAPI server accepts programmatic annotation requests over HTTP. See [WEB_SERVICE_MODE.md](WEB_SERVICE_MODE.md) for full documentation.
-
----
-
 ## Output Format Summary
 
 | Path | Content |
 |------|---------|
-| `annotations/<stem>_<layer>.png` | 8-bit grayscale mask for one layer (0 = unlabeled) |
+| `annotations/<stem>_<layer>.png` | 1-bit binary mask for one layer (0 = unlabeled) |
 | `annotations/<stem>.metadata` | JSON: time per layer, pixel counts, correction metrics |
 | `annotations/logs/<stem>.json` | Append-only JSON action log |
 | `.pixelsmart/project.json` | Project configuration (layers, tool state, plugin config) |
